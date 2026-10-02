@@ -1,0 +1,239 @@
+Вот готовая, структурированная и компактная техническая шпаргалка по Модулю 3 для вашего GitHub-репозитория. Она содержит конкретные команды, пути и блоки конфигураций для ОС «Альт» (ALT Linux), EcoRouter и сопутствующего ПО в рамках демонстрационного экзамена.
+------------------------------
+## 🚀 Шпаргалка по подготовке к ДЭ (КОД 09.02.06-1-2026) — Модуль 3## 🧑‍🤝‍🧑 1. Импорт пользователей в домен (Сервер BR-SRV)
+Для массового импорта пользователей из файла users.csv (находящегося в ISO-образе) в Samba Active Directory используется скрипт на bash или встроенный инструмент samba-tool.
+Пример bash-скрипта обработки users.csv (предполагается разделитель , и структура: username,password,firstname,lastname):
+
+# Монтируем ISO и переходим к файлу
+mount /dev/sr0 /media
+cd /media
+# Читаем CSV и импортируем пользователей в Samba DC
+tail -n +2 users.csv | while IFS=',' read -r username password firstname lastname; do
+  samba-tool user create "$username" "$password" --given-name="$firstname" --surname="$lastname" --use-username-as-samanthadone
+
+------------------------------
+## 🔒 2. Центр сертификации ГОСТ и HTTPS (Сервер HQ-SRV и ISP)## Настройка CA с ГОСТ-алгоритмами на HQ-SRV:
+ALT Linux использует пакеты openssl-gost-engine. Корректируем /etc/openssl.cnf для включения ГОСТ-провайдера.
+
+# Генерация корневого закрытого ключа и сертификата ГОСТ на 30 дней
+openssl req -newkey gost2012_256 -nodes -keyout ca.key -x509 -days 30 -out ca.crt -subj "/C=RU/O=au-team/CN=AU-TEAM Root CA"
+# Экспорт корневого сертификата на клиенты (HQ-CLI) для обеспечения доверия
+cp ca.crt /usr/share/ca-certificates/trust-source/anchors/
+update-ca-trust
+
+## Выпуск сертификатов для веб-серверов:
+
+# Для web.au-team.irpo
+openssl req -newkey gost2012_256 -nodes -keyout web.key -out web.csr -subj "/C=RU/O=au-team/CN=web.au-team.irpo"
+openssl x509 -req -in web.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out web.crt -days 30
+# Для docker.au-team.irpo
+openssl req -newkey gost2012_256 -nodes -keyout docker.key -out docker.csr -subj "/C=RU/O=au-team/CN=docker.au-team.irpo"
+openssl x509 -req -in docker.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out docker.crt -days 30
+
+## Перенастройка Nginx Reverse Proxy на HTTPS (Маршрутизатор ISP):
+Копируем выпущенные ключи/сертификаты на ISP и правим /etc/nginx/conf.d/proxy.conf:
+
+server {
+    listen 443 ssl;
+    server_name web.au-team.irpo;
+
+    ssl_certificate /etc/nginx/ssl/web.crt;
+    ssl_certificate_key /etc/nginx/ssl/web.key;
+
+    location / {
+        auth_basic "Restricted Access";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://<IP_HQ-SRV>:80;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name docker.au-team.irpo;
+
+    ssl_certificate /etc/nginx/ssl/docker.crt;
+    ssl_certificate_key /etc/nginx/ssl/docker.key;
+
+    location / {
+        proxy_pass http://<IP_BR-SRV>:8080;
+    }
+}
+
+------------------------------
+## 🛜 3. Защищенный IPsec туннель (HQ-RTR и BR-RTR)
+На устройствах под управлением EcoRouterOS перенастраиваем базовый GRE/IP in IP туннель в шифрованный режим.
+
+# Пример конфигурации на HQ-RTR (на BR-RTR зеркально)
+crypto ikev2 policy IKE-POLICY
+ encryption aes-256
+ integrity sha256
+ group 14
+exit
+
+crypto ikev2 profile IKE-PROFILE
+ match identity remote address <Внешний_IP_BR-RTR>
+ identity local address <Внешний_IP_HQ-RTR>
+ authentication local pre-shared-key P@ssw0rdTunnel
+ authentication remote pre-shared-key P@ssw0rdTunnel
+exit
+
+crypto ipsec transform-set ESP-SET esp-aes-256 esp-sha256-hmac
+ mode tunnel
+exit
+
+crypto ipsec profile IPSEC-PROFILE
+ set transform-set ESP-SET
+ set ikev2-profile IKE-PROFILE
+exit
+
+# Привязка к интерфейсу туннеля
+interface tunnel0
+ tunnel protection ipsec profile IPSEC-PROFILE
+exit
+
+Убедитесь, что протокол динамической маршрутизации (OSPF/RIP) привязан к интерфейсу tunnel0.
+------------------------------
+## 🧱 4. Межсетевой экран (HQ-RTR и BR-FW / Ideco)## На HQ-RTR (EcoRouter):
+Создаем списки доступа (ACL), разрешающие только легитимный трафик (HTTP, HTTPS, DNS, NTP, ICMP):
+
+ip access-list extended M2_FIREWALL
+ permit tcp any any eq 80
+ permit tcp any any eq 443
+ permit udp any any eq 53
+ permit udp any any eq 123
+ permit icmp any any
+ deny ip any any
+exit
+
+interface ge0 (внешний интерфейс к ISP)
+ ip access-list M2_FIREWALL in
+exit
+
+------------------------------
+## 🖨 5. Принт-сервер CUPS (Сервер HQ-SRV и HQ-CLI)## На сервере (HQ-SRV):
+
+apt-get install -y cups cups-filters
+systemctl enable --now cups
+# Разрешаем доступ из сети в /etc/cups/cupsd.conf# Измените "Listen localhost:631" на "Port 631"# Добавьте "<Location /> Order allow,deny \n Allow 192.168.0.0/16 </Location>"
+# Добавление виртуального PDF-принтера
+lpadmin -p PDF-Printer -E -v cups-pdf:/ -m raw
+
+## На клиенте (HQ-CLI):
+
+lpadmin -p HQ-PDF-Printer -E -v ipp://<IP_HQ-SRV>:631/printers/PDF-Printer
+lpoptions -d HQ-PDF-Printer # Делаем принтером по умолчанию
+
+------------------------------
+## 📜 6. Сервер логирования Syslog + Ротация (Сервер HQ-SRV)## На сервере (HQ-SRV):
+Используем rsyslog. Правим /etc/rsyslog.conf (раскомментируем UDP-модуль на порту 514):
+
+$ModLoad imudp
+$UDPServerRun 514
+
+# Шаблон динамического распределения папок по имени хоста (исключая localhost)
+$template RemoteLogs,"/opt/%HOSTNAME%/%PROGRAMNAME%.log"
+if $fromhost-ip != '127.0.0.1' and $syslogseverity <= 4 then ?RemoteLogs
+& stop
+
+systemctl restart rsyslog
+
+## Настройка ротации логов (/etc/logrotate.d/syslog-opt):
+
+/opt/*/*.log {
+    weekly
+    size 10M
+    compress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        /bin/kill -HUP `cat /var/run/rsyslogd.pid 2> /dev/null` 2> /dev/null || true
+    endscript
+}
+
+------------------------------
+## 📊 7. Мониторинг Zabbix в контейнере (Сервер HQ-SRV)
+Разворачиваем стек Zabbix через Docker Compose на порту 80 (или другом свободном):
+
+version: '3.5'services:
+  zabbix-db:
+    image: mariadb:latest
+    environment:
+      MYSQL_DATABASE: zabbix
+      MYSQL_USER: zabbix
+      MYSQL_PASSWORD: P@ssw0rd
+      MYSQL_ROOT_PASSWORD: RootP@ssw0rd
+  zabbix-server:
+    image: zabbix/zabbix-server-mysql:latest
+    ports:
+      - "10051:10051"
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      MYSQL_DATABASE: zabbix
+      MYSQL_USER: zabbix
+      MYSQL_PASSWORD: P@ssw0rd
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-mysql:latest
+    ports:
+      - "80:8080" # Внешний порт 80 для mon.au-team.irpo
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      MYSQL_DATABASE: zabbix
+      MYSQL_USER: zabbix
+      MYSQL_PASSWORD: P@ssw0rd
+      ZBX_SERVER_HOST: zabbix-server
+
+
+* DNS: В локальный /etc/hosts или на локальном DNS-сервере прописать mon.au-team.irpo -> <IP_HQ-SRV>.
+* Доступ: Учетные данные по умолчанию меняются в UI на admin / P@ssw0rd. Добавить шаблоны ОС Linux (через zabbix-agent на HQ-SRV и BR-SRV) для метрик CPU, RAM, Disk.
+
+------------------------------
+## 🤖 8. Инвентаризация через Ansible Playbook (Сервер BR-SRV)
+Создаем плейбук /etc/ansible/get_info.yml на базе файла из Additional.iso:
+
+---
+- name: Сбор инвентаризационных данных
+  hosts: hq_srv, hq_cli
+  gather_facts: yes
+  tasks:
+    - name: Создание структуры каталога отчетов
+      file:
+        path: /etc/ansible/PC-INFO
+        state: directory
+      delegate_to: localhost
+
+    - name: Генерация YAML-отчета
+      template:
+        src: report.yml.j2
+        dest: "/etc/ansible/PC-INFO/{{ ansible_hostname }}.yml"
+      delegate_to: localhost
+
+Шаблон report.yml.j2:
+
+Hostname: "{{ ansible_hostname }}"
+IP_Address: "{{ ansible_default_ipv4.address }}"
+
+------------------------------
+## 🔨 9. Защита SSH от подбора паролей через PAM (Сервер HQ-SRV)
+ALT Linux использует модуль pam_tally2 или pam_faillock. Настройка /etc/pam.d/sshd:
+
+# Добавляем в начало секции auth:
+auth required pam_faillock.so preauth silent audit deny=3 unlock_time=60
+auth [default=die] pam_faillock.so authfail audit deny=3 unlock_time=60
+
+# Добавляем в начало секции account:
+account required pam_faillock.so
+
+------------------------------
+## 💾 10. Резервное копирование Кибер Бэкап (HQ-SRV и HQ-CLI)
+
+   1. Сервер управления: Устанавливаем CyberBackupServer-*.rpm на HQ-SRV. Создаем в системе пользователя irpoadmin и задаем пароль P@ssw0rd. Заводим его в веб-консоли управления организацией irpo.
+   2. Узел хранения: На HQ-CLI устанавливаем Агент и Компонент узла хранения (CyberBackupAgentStorage-*.rpm).
+   3. Устройство хранения: Через веб-интерфейс подключаем узел HQ-CLI, инициализируем локальную директорию /backup.
+   4. Планы резервного копирования:
+   * План 1 (Файловый): Источник — папка /etc, назначение — узел хранения HQ-CLI.
+      * План 2 (Скриптовый/Приложения): Предварительно настраивается дамп базы mysqldump -u root webdb > /var/backup/dump.sql, и бэкапится полученный файл, либо используется встроенный модуль защиты приложений MySQL.
+   
+------------------------------
+Шпора готова к пушу. Если вам понадобятся шаблоны конфигурационных файлов Nginx/Ansible в виде отдельных текстовых файлов, дайте знать!
+
