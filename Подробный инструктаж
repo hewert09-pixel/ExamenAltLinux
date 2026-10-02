@@ -33,7 +33,7 @@ enable
 configure terminal
 hostname hq-rtr
 ip domain-name au-team.irpo
-username net_admin password P@ssw0rd role admin
+username net_admin password P@ssw0rd role admin или useradd -m -G wheel net_admin passwd net_admin
 Используйте код с осторожностью.
 	• На BR-RTR:text
 enable
