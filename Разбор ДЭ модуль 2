@@ -1,0 +1,268 @@
+Задание 12. Контроллер домена Samba DC (Сервер BR-SRV)
+1. Инициализация Samba DC (au-team.irpo)
+Перед настройкой убедитесь, что имя хоста настроено верно (hostnamectl set-hostname br-srv.au-team.irpo).
+Удаляем стандартный конфиг (если есть) и запускаем интерактивное или автоматическое развертывание:
+bash
+rm -f /etc/samba/smb.conf
+samba-tool domain provision --use-rfc2307 --realm=AU-TEAM.IRPO --domain=AU-TEAM --server-role=dc --dns-backend=SAMBA_INTERNAL --adminpass="P@ssw0rd123"
+systemctl enable --now samba
+Используйте код с осторожностью.
+2. Ввод в домен машин HQ-CLI и BR-CLI
+Выполняется на самих клиентах (HQ-CLI / BR-CLI) через system-auth или adcli:
+bash
+# Настройка DNS на контроллер домена в /etc/resolv.conf: nameserver <IP_BR-SRV>
+net ads join -U Administrator%"P@ssw0rd123"
+# Или средствами ALT Linux:
+control system-auth ad AU-TEAM.IRPO <IP_BR-SRV>
+Используйте код с осторожностью.
+3. Автоматизация создания групп и пользователей (Офисы HQ и BR)
+Запустите скрипт на BR-SRV для массового создания объектов в Active Directory:
+bash
+# Создание групп
+samba-tool group add hq
+samba-tool group add br
+
+# Создание 5 пользователей hquser и добавление в группу hq
+for i in {1..5}; do
+  samba-tool user create hquser$i "P@ssw0rd123" --use-username-as-samantha
+  samba-tool group addmembers hq hquser$i
+done
+
+# Создание 5 пользователей bruser и добавление в группу br
+for i in {1..5}; do
+  samba-tool user create bruser$i "P@ssw0rd123" --use-username-as-samantha
+  samba-tool group addmembers br bruser$i
+done
+Используйте код с осторожностью.
+4. Ограничение прав входа (Локальная аутентификация)
+• На HQ-CLI: разрешить вход только группе hq.
+• На BR-CLI: разрешить вход только группе br.
+Редактируем /etc/security/access.conf:
+text
+# На HQ-CLI:
++ : @hq : ALL
++ : root : ALL
+- : ALL : ALL
+
+# На BR-CLI:
++ : @br : ALL
++ : root : ALL
+- : ALL : ALL
+Используйте код с осторожностью.
+Убедитесь, что в /etc/pam.d/system-auth включена строка account required pam_access.so.
+5. Ограничение Sudo для группы hq
+На машине HQ-CLI создаем файл ограничений /etc/sudoers.d/hq_restrictions:
+text
+# Разрешаем запуск только cat, grep, id без ввода пароля (или с паролем, убрав NOPASSWD)
+%hq ALL=(ALL:ALL) NOPASSWD: /bin/cat, /bin/grep, /usr/bin/id
+Используйте код с осторожностью.
+💾 Задание 13. Фильтр-хранилище RAID-0 (Сервер HQ-SRV)
+bash
+# Установка утилиты управления (если отсутствует)
+apt-get update && apt-get install -y mdadm
+
+# Создание RAID-0 из двух дисков по 1 Гб (например, /dev/sdb и /dev/sdc)
+mdadm --create --verbose /dev/md0 --level=0 --raid-devices=2 /dev/sdb /dev/sdc
+
+# Сохранение конфигурации массива
+mkdir -p /etc/mdadm
+mdadm --detail --scan >> /etc/mdadm.conf
+
+# Создание файловой системы ext4
+mkfs.ext4 /dev/md0
+
+# Автомонтирование в /raid
+mkdir -p /raid
+echo "/dev/md0 /raid ext4 defaults 0 2" >> /etc/fstab
+mount -a
+Используйте код с осторожностью.
+📂 Задание 14. Сервер NFS (Сервер HQ-SRV)
+На сервере (HQ-SRV):
+bash
+apt-get install -y nfs-utils
+mkdir -p /raid/nfs
+
+# Настройка прав (замените подсети на ваши актуальные VLAN-сети HQ-CLI и BR-CLI)
+# Пример: 192.168.200.0/24 (HQ) и 192.168.0.0/24 (BR)
+echo "/raid/nfs 192.168.200.0/24(rw,sync,no_subtree_check) 192.168.0.0/24(rw,sync,no_subtree_check)" >> /etc/exports
+
+systemctl enable --now nfs-server
+Используйте код с осторожностью.
+На клиентах (HQ-CLI и BR-CLI):
+Настройка автомонтирования через /etc/fstab:
+bash
+mkdir -p /mnt/nfs
+echo "<IP_HQ-SRV>:/raid/nfs /mnt/nfs nfs defaults,_netdev 0 0" >> /etc/fstab
+mount -a
+Используйте код с осторожностью.
+⏰ Задание 15. Служба времени Chrony (Маршрутизатор ISP)
+Настройка сервера (ISP):
+Редактируем /etc/chrony.conf:
+text
+# Вышестоящий сервер (на выбор)
+server pool.ntp.org iburst
+
+# Разрешаем подключение клиентов из сетей инфраструктуры
+allow 172.16.1.0/28
+allow 172.16.2.0/28
+# Если туннели настроены, можно разрешить внутренние подсети HQ и BR, либо указать конкретные IP:
+allow 192.168.0.0/16
+
+# Принудительно выставляем стратум 5
+local stratum 5
+Используйте код с осторожностью.
+bash
+systemctl restart chronyd
+Используйте код с осторожностью.
+Настройка клиентов (HQ-SRV, HQ-CLI, BR-RTR, BR-SRV, BR-CLI):
+В конфигурационном файле NTP/Chrony каждого клиента прописать:
+text
+server <IP_ISP> iburst
+Используйте код с осторожностью.
+Перезапустить службу времени (systemctl restart chronyd).
+🤖 Задание 16. Конфигурация Ansible (Сервер BR-SRV)
+bash
+apt-get install -y ansible
+mkdir -p /etc/ansible
+Используйте код с осторожностью.
+Создаем файл инвентаря /etc/ansible/hosts:
+ini
+[infrastructure]
+hq_srv ansible_host=<IP_HQ-SRV>
+hq_cli ansible_host=<IP_HQ-CLI>
+hq_rtr ansible_host=<IP_HQ-RTR>
+br_rtr ansible_host=<IP_BR-RTR>
+br_cli ansible_host=<IP_BR-CLI>
+
+[all:vars]
+ansible_user=net_admin # или sshuser в зависимости от настроек ключей SSH
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+Используйте код с осторожностью.
+Проверка связи (pong без предупреждений):
+bash
+ansible all -m ping -i /etc/ansible/hosts
+Используйте код с осторожностью.
+🐳 Задание 17. Веб-приложение в Docker (Сервер BR-SRV)
+1. Импорт образов из Additional.iso
+bash
+mount /dev/sr0 /media # или другой путь монтирования ISO
+cd /media/docker
+docker load -i site_latest.tar
+docker load -i mariadb_latest.tar
+Используйте код с осторожностью.
+2. Создание файла docker-compose.yml
+yaml
+version: '3.8'
+
+services:
+  db:
+    image: mariadb:latest # укажите точный тег импортированного образа
+    container_name: db
+    restart: always
+    environment:
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: test
+      MYSQL_PASSWORD: P@ssw0rd
+      MYSQL_ROOT_PASSWORD: RootP@ssw0rd
+    volumes:
+      - db_data:/var/lib/mysql
+
+  testapp:
+    image: site:latest # укажите точный тег импортированного образа
+    container_name: testapp
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: db
+      DB_NAME: testdb
+      DB_USER: test
+      DB_PASS: P@ssw0rd
+    depends_on:
+      - db
+
+volumes:
+  db_data:
+Используйте код с осторожностью.
+bash
+docker compose up -d
+Используйте код с осторожностью.
+🌐 Задание 18. Веб-приложение Apache + MariaDB (Сервер HQ-SRV)
+bash
+apt-get install -y apache2 mariadb-server php php-mysqlnd
+systemctl enable --now httpd maridb
+
+# Импорт БД
+mysql -u root -e "CREATE DATABASE webdb;"
+mysql -u root webdb < /media/web/dump.sql
+
+# Создание пользователя
+mysql -u root -e "CREATE USER 'web'@'localhost' IDENTIFIED BY 'P@ssw0rd';"
+mysql -u root -e "GRANT ALL PRIVILEGES ON webdb.* TO 'web'@'localhost'; FLUSH PRIVILEGES;"
+
+# Копирование файлов
+cp -r /media/web/index.php /media/web/images /var/www/html/
+chown -r apache:apache /var/www/html/
+
+# Редактирование параметров подключения к БД в /var/www/html/index.php
+# Указать: host=localhost, dbname=webdb, user=web, password=P@ssw0rd
+
+systemctl restart httpd
+Используйте код с осторожностью.
+🔀 Задание 19. Статическая трансляция портов (DNAT на EcoRouter/Linux)
+Если роутеры на базе EcoRouterOS (пример синтаксиса):
+text
+# На BR-RTR:
+ip nat destination static bottom 172.16.2.1 tcp 8080 <IP_BR-SRV> 8080
+ip nat destination static bottom 172.16.2.1 tcp 2026 <IP_BR-SRV> 2026
+
+# На HQ-RTR:
+ip nat destination static bottom 172.16.1.1 tcp 8080 <IP_HQ-SRV> 8080
+ip nat destination static bottom 172.16.1.1 tcp 2026 <IP_HQ-SRV> 2026
+Используйте код с осторожностью.
+🔄 Задание 20 и 21. Nginx как Reverse Proxy + Basic Auth (Маршрутизатор ISP)
+1. Генерация пароля для Basic Auth (Задание 21)
+bash
+apt-get install -y apache2-utils # содержит утилиту htpasswd
+htpasswd -bc /etc/nginx/.htpasswd WEB P@ssw0rd
+Используйте код с осторожностью.
+2. Конфигурация Nginx (/etc/nginx/nginx.conf или conf.d/proxy.conf)
+nginx
+# Прокси для web.au-team.irpo -> HQ-SRV
+server {
+    listen 80;
+    server_name web.au-team.irpo;
+
+    location / {
+        auth_basic "Restricted Access";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+
+        proxy_pass http://<Внешний_IP_HQ-RTR>:8080; 
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+
+# Прокси для docker.au-team.irpo -> BR-SRV (Docker)
+server {
+    listen 80;
+    server_name docker.au-team.irpo;
+
+    location / {
+        # Здесь аутентификация по условию не требуется
+        proxy_pass http://<Внешний_IP_BR-RTR>:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+Используйте код с осторожностью.
+bash
+systemctl enable --now nginx
+Используйте код с осторожностью.
+🌍 Задание 22. Установка Яндекс Браузера (HQ-CLI)
+Скачайте .rpm пакет или установите его через подключенный репозиторий:
+bash
+# Прямая установка локального rpm-пакета
+apt-get install -y /path/to/yandex-browser-stable*.rpm
+# Или через eepm (фирменную утилиту ALT для стороннего софта)
+epm play yandex-browser
