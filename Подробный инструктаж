@@ -33,14 +33,16 @@ enable
 configure terminal
 hostname hq-rtr
 ip domain-name au-team.irpo
-username net_admin password P@ssw0rd role admin или useradd -m -G wheel net_admin passwd net_admin
+username net_admin
+password P@ssw0rd role admin или useradd -m -G wheel net_admin passwd net_admin
 Используйте код с осторожностью.
 	• На BR-RTR:text
 enable
 configure terminal
 hostname br-rtr
 ip domain-name au-team.irpo
-username net_admin password P@ssw0rd role admin
+username net_admin password P@ssw0rd 
+role admin
 Используйте код с осторожностью.
 2. Расчет IP-адресации приватного диапазона (RFC1918) и настройка L3-интерфейсов:
 	• Локальная сеть HQ-SRV (VLAN 100): \(\le \) 32 адресов \(\rightarrow \) префикс /27 (сеть 192.168.100.0/27, шлюз 192.168.100.1).
