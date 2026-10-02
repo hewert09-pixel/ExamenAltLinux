@@ -9,7 +9,9 @@ systemctl enable --now samba
 Используйте код с осторожностью.
 2. Ввод в домен машин HQ-CLI и BR-CLI
 Выполняется на самих клиентах (HQ-CLI / BR-CLI) через system-auth или adcli:
-bash
+bash (если команда не сработала то 1 apt-get install task-auth-ad-sssd
+2 синтаксис команды ввода в домен system-auth write ad <имя_домена> <имя_компьютера> <рабочая_группа> '<администратор_домена>' '<пароль>'
+пример заполнения: system-auth write ad au-team.irpo hq-cli AU-TEAM 'administrator' 'P@ssw0rd'
 # Настройка DNS на контроллер домена в /etc/resolv.conf: nameserver <IP_BR-SRV>
 net ads join -U Administrator%"P@ssw0rd123"
 # Или средствами ALT Linux:
