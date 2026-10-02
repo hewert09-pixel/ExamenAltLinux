@@ -1,0 +1,555 @@
+МОДУЛЬ 1. Настройка сетевой инфраструктуры
+Задание 1. Базовая настройка хостов на ОС «Альт» (HQ-SRV, BR-SRV, HQ-CLI)
+1. Установка FQDN (Полного доменного имени):
+	• На сервере HQ-SRV:bash
+su -
+hostnamectl set-hostname hq-srv.au-team.irpo; exec bash
+Используйте код с осторожностью.
+	• На сервере BR-SRV:bash
+hostnamectl set-hostname br-srv.au-team.irpo; exec bash
+Используйте код с осторожностью.
+	• На рабочей станции HQ-CLI:bash
+hostnamectl set-hostname hq-cli.au-team.irpo; exec bash
+Используйте код с осторожностью.
+2. Создание пользователя sshuser и настройка sudo:
+	• Выполните на HQ-SRV и BR-SRV:bash
+# Создание пользователя с UID 2026
+useradd sshuser -u 2026
+# Задание пароля P@ssw0rd (модуль passwdqc потребует именно такой сложности)
+passwd sshuser
+# Добавление в группу wheel
+gpasswd -a sshuser wheel
+Используйте код с осторожностью.
+	• Настройка беспарольного sudo для группы wheel (требование задания):bash
+# Откройте файл /etc/sudoers (или используйте visudo)
+vim /etc/sudoers
+# Найдите и раскомментируйте (или добавьте) строку:
+WHEEL_USERS ALL=(ALL:ALL) NOPASSWD: ALL
+Используйте код с осторожностью.
+Задание 2. Конфигурация маршрутизаторов EcoRouterOS (HQ-RTR, BR-RTR)
+1. Базовая конфигурация и создание учетной записи администратора:
+	• На HQ-RTR:text
+enable
+configure terminal
+hostname hq-rtr
+ip domain-name au-team.irpo
+username net_admin password P@ssw0rd role admin
+Используйте код с осторожностью.
+	• На BR-RTR:text
+enable
+configure terminal
+hostname br-rtr
+ip domain-name au-team.irpo
+username net_admin password P@ssw0rd role admin
+Используйте код с осторожностью.
+2. Расчет IP-адресации приватного диапазона (RFC1918) и настройка L3-интерфейсов:
+	• Локальная сеть HQ-SRV (VLAN 100): \(\le \) 32 адресов \(\rightarrow \) префикс /27 (сеть 192.168.100.0/27, шлюз 192.168.100.1).
+	• Локальная сеть HQ-CLI (VLAN 200): \(\ge \) 16 адресов \(\rightarrow \) префикс /24 (сеть 192.168.200.0/24, шлюз 192.168.200.1).
+	• Локальная сеть управления (VLAN 999): \(\le \) 8 адресов \(\rightarrow \) префикс /29 (сеть 192.168.99.0/29, шлюз 192.168.99.1).
+	• Локальная сеть BR-SRV: \(\le \) 16 адресов \(\rightarrow \) префикс /28 (сеть 192.168.0.0/28, шлюз 192.168.0.1).
+Конфигурация интерфейсов на HQ-RTR:text
+interface vl100
+ description "VLAN 100 HQ-SRV"
+ ip address 192.168.100.1/27
+exit
+interface vl200
+ description "VLAN 200 HQ-CLI"
+ ip address 192.168.200.1/24
+exit
+interface vl999
+ description "VLAN 999 MGMT"
+ ip address 192.168.99.1/29
+exit
+interface isp
+ description "Link to ISP"
+ ip address 172.16.1.2/28
+exit
+ip route 0.0.0.0/0 172.16.1.1
+Используйте код с осторожностью.
+Конфигурация L2-коммутации (Service Instances) на физическом порту HQ-RTR (802.1Q Router-on-a-Stick):text
+port ge1
+ service-instance ge1/vl100
+  encapsulation dot1q 100 exact
+  rewrite pop 1
+  connect ip interface vl100
+ exit
+ service-instance ge1/vl200
+  encapsulation dot1q 200 exact
+  rewrite pop 1
+  connect ip interface vl200
+ exit
+ service-instance ge1/vl999
+  encapsulation dot1q 999 exact
+  rewrite pop 1
+  connect ip interface vl999
+ exit
+exit
+
+port ge0
+ service-instance ge0/isp
+  encapsulation untagged
+  connect ip interface isp
+ exit
+exit
+write memory
+Используйте код с осторожностью.
+Конфигурация интерфейсов на BR-RTR:text
+interface int1
+ description "BR-Net"
+ ip address 192.168.0.1/28
+exit
+interface isp
+ description "Link to ISP"
+ ip address 172.16.2.2/28
+exit
+ip route 0.0.0.0/0 172.16.2.1
+
+port ge1
+ service-instance ge1/int1
+  encapsulation untagged
+  connect ip interface int1
+ exit
+exit
+port ge0
+ service-instance ge0/isp
+  encapsulation untagged
+  connect ip interface isp
+ exit
+exit
+write memory
+Используйте код с осторожностью.
+Задание 3. Статическая и динамическая настройка сети на хостах ОС «Альт»
+Настройка выполняется через встроенную сетевую подсистему etcnet.
+1. Статическая настройка HQ-SRV (ens19):bash
+mkdir -p /etc/net/ifaces/ens19
+
+# Файл параметров
+echo "TYPE=eth" > /etc/net/ifaces/ens19/options
+echo "BOOTPROTO=static" >> /etc/net/ifaces/ens19/options
+
+# Адрес и шлюз
+echo "192.168.100.2/27" > /etc/net/ifaces/ens19/ipv4address
+echo "default via 192.168.100.1" > /etc/net/ifaces/ens19/ipv4route
+
+systemctl restart network
+Используйте код с осторожностью.
+2. Статическая настройка BR-SRV (ens19):bash
+mkdir -p /etc/net/ifaces/ens19
+echo "TYPE=eth" > /etc/net/ifaces/ens19/options
+echo "BOOTPROTO=static" >> /etc/net/ifaces/ens19/options
+echo "192.168.0.2/28" > /etc/net/ifaces/ens19/ipv4address
+echo "default via 192.168.0.1" > /etc/net/ifaces/ens19/ipv4route
+
+systemctl restart network
+Используйте код с осторожностью.
+Задание 4. Межсетевой экран и динамический NAT/PAT (Машина ISP)
+Устройство ISP выступает в роли провайдера, выдает себе адрес по DHCP на внешнем интерфейсе и маскарадит внутренние сети роутеров.
+1. Включение форвардинга пакетов в ядре Linux:bash
+# Разрешаем пересылку трафика между интерфейсами
+sed -i "s/net.ipv4.ip_forward = 0/net.ipv4.ip_forward = 1/g" /etc/net/sysctl.conf
+systemctl restart network
+Используйте код с осторожностью.
+2. Настройка PAT (Маскарадинга) через iptables:bash
+apt-get update && apt-get install -y iptables
+
+# Определяем внешний интерфейс (например, ens19, смотрящий на провайдера с DHCP)
+# Создаем правила трансляции для подсетей между ISP и RTR
+iptables -t nat -A POSTROUTING -s 172.16.1.0/28 -o ens19 -j MASQUERADE
+iptables -t nat -A POSTROUTING -s 172.16.2.0/28 -o ens19 -j MASQUERADE
+
+# Сохраняем правила в конфигурацию Альт Линукс
+iptables-save >> /etc/sysconfig/iptables
+systemctl enable --now iptables
+Используйте код с осторожностью.
+Задание 5. Виртуальный коммутатор Open vSwitch (HQ-SW)
+Выполняется на ВМ HQ-SW для коммутации трафика разных VLAN (100, 200, 999) между роутером и хостами.
+bash
+apt-get install -y openvswitch
+systemctl enable --now openvswitch
+
+# Создание программного моста
+ovs-vsctl add-br SW
+
+# ens3 подключен к HQ-RTR (Trunk порт)
+ovs-vsctl add-port SW ens3 trunk=100,200,999
+
+# ens4 подключен к HQ-SRV (Access порт VLAN 100)
+ovs-vsctl add-port SW ens4 tag=100
+
+# ens5 подключен к HQ-CLI (Access порт VLAN 200)
+ovs-vsctl add-port SW ens5 tag=200
+
+# Проверка конфигурации коммутатора
+ovs-vsctl show
+Используйте код с осторожностью.
+
+МОДУЛЬ 2. Организация сетевого администрирования
+Задание 12. Контроллер домена Samba DC (Сервер BR-SRV, клиенты HQ-CLI/BR-CLI)
+1. Подготовка и смена имени хоста на BR-SRV:bash
+hostnamectl set-hostname br-srv.au-team.irpo --static
+exec bash
+Используйте код с осторожностью.
+2. Установка пакетов и развертывание Samba DC:bash
+apt-get update && apt-get install -y samba samba-client sssd adcli task-samba-dc
+rm -f /etc/samba/smb.conf
+samba-tool domain provision --use-rfc2307 --realm=AU-TEAM.IRPO --domain=AU-TEAM --server-role=dc --dns-backend=SAMBA_INTERNAL --adminpass="P@ssw0rd123"
+systemctl enable --now samba
+Используйте код с осторожностью.
+3. Пакетное создание групп и пользователей (Офисы HQ и BR):bash
+# Создание доменных групп
+samba-tool group add hq
+samba-tool group add br
+
+# Импорт/создание пользователей офиса HQ (hquser1 - hquser5)
+for i in {1..5}; do
+  samba-tool user create hquser$i "P@ssw0rd123" --use-username-as-samantha
+  samba-tool group addmembers hq hquser$i
+done
+
+# Импорт/создание пользователей офиса BR (bruser1 - bruser5)
+for i in {1..5}; do
+  samba-tool user create bruser$i "P@ssw0rd123" --use-username-as-samantha
+  samba-tool group addmembers br bruser$i
+done
+Используйте код с осторожностью.
+4. Ограничение прав входа на клиентах (HQ-CLI и BR-CLI):
+	• Введите машины в домен через control system-auth ad AU-TEAM.IRPO <IP_BR-SRV>.
+	• На HQ-CLI откройте /etc/security/access.conf и впишите в конец:text
++ : @hq : ALL
++ : root : ALL
+- : ALL : ALL
+Используйте код с осторожностью.
+	• На BR-CLI в этот же файл впишите:text
++ : @br : ALL
++ : root : ALL
+- : ALL : ALL
+Используйте код с осторожностью.
+	• Активируйте модуль PAM, добавив account required pam_access.so в /etc/pam.d/system-auth.
+5. Ограничение прав sudo для группы hq на HQ-CLI:
+Создайте файл /etc/sudoers.d/hq_rule:text
+%hq ALL=(ALL:ALL) NOPASSWD: /bin/cat, /bin/grep, /usr/bin/id
+Используйте код с осторожностью.
+Задание 13. Фильтровое файловое хранилище RAID-0 (Сервер HQ-SRV)
+1. Создание дискового массива:bash
+apt-get install -y mdadm
+# Предполагается, что два дополнительных диска определились как sdb и sdc
+mdadm --create --verbose /dev/md0 --level=0 --raid-devices=2 /dev/sdb /dev/sdc
+mkdir -p /etc/mdadm
+mdadm --detail --scan >> /etc/mdadm.conf
+Используйте код с осторожностью.
+2. Разметка, форматирование и монтаж:bash
+mkfs.ext4 /dev/md0
+mkdir -p /raid
+echo "/dev/md0 /raid ext4 defaults 0 2" >> /etc/fstab
+mount -a
+Используйте код с осторожностью.
+Задание 14. Настройка сервера NFS (Сервер HQ-SRV, клиенты HQ-CLI/BR-CLI)
+1. Конфигурация сервера (HQ-SRV):bash
+apt-get install -y nfs-utils
+mkdir -p /raid/nfs
+# Замените подсети на актуальные адреса VLANов HQ-CLI и BR-CLI согласно Модулю 1
+echo "/raid/nfs 192.168.200.0/24(rw,sync,no_subtree_check) 192.168.0.0/24(rw,sync,no_subtree_check)" >> /etc/exports
+systemctl enable --now nfs-server
+exportfs -r
+Используйте код с осторожностью.
+2. Конфигурация клиентов (HQ-CLI и BR-CLI):bash
+mkdir -p /mnt/nfs
+echo "<IP_HQ-SRV>:/raid/nfs /mnt/nfs nfs defaults,_netdev 0 0" >> /etc/fstab
+mount -a
+Используйте код с осторожностью.
+Задание 15. Служба точного времени Chrony (Маршрутизатор ISP)
+1. Настройка сервера (ISP):
+Отредактируйте /etc/chrony.conf:text
+server pool.ntp.org iburst
+allow 192.168.0.0/16
+allow 172.16.0.0/12
+local stratum 5
+Используйте код с осторожностью.
+bash
+systemctl restart chronyd
+Используйте код с осторожностью.
+2. Настройка клиентов (Все остальные машины):
+В файле /etc/chrony.conf клиентов укажите: server <IP_ISP> iburst и перезапустите службу.
+Задание 16. Среда автоматизации Ansible (Сервер BR-SRV)
+1. Подготовка структуры каталогов и инвентаря:bash
+apt-get install -y ansible-core
+mkdir -p /etc/ansible
+Используйте код с осторожностью.
+2. Создание /etc/ansible/hosts:ini
+[infrastructure]
+hq_srv ansible_host=192.168.100.2
+hq_cli ansible_host=192.168.200.2
+hq_rtr ansible_host=172.16.1.2
+br_rtr ansible_host=172.16.2.2
+br_cli ansible_host=192.168.0.3
+
+[all:vars]
+ansible_user=net_admin
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+Используйте код с осторожностью.
+3. Проверка бесперебойной связи:bash
+ansible all -m ping -i /etc/ansible/hosts
+Используйте код с осторожностью.
+Задание 17. Веб-приложение в Docker (Сервер BR-SRV)
+1. Импорт локальных образов:bash
+mount /dev/sr0 /media
+docker load -i /media/docker/site_latest.tar
+docker load -i /media/docker/mariadb_latest.tar
+Используйте код с осторожностью.
+2. Написание docker-compose.yml в рабочей директории:yaml
+version: '3.8'
+services:
+  db:
+    image: mariadb_latest:latest
+    container_name: db
+    environment:
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: test
+      MYSQL_PASSWORD: P@ssw0rd
+      MYSQL_ROOT_PASSWORD: RootPassword
+    volumes:
+      - db_data:/var/lib/mysql
+  testapp:
+    image: site_latest:latest
+    container_name: testapp
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: db
+      DB_NAME: testdb
+      DB_USER: test
+      DB_PASS: P@ssw0rd
+    depends_on:
+      - db
+volumes:
+  db_data:
+Используйте код с осторожностью.
+bash
+docker compose up -d
+Используйте код с осторожностью.
+Задание 18. Веб-приложение Apache + MariaDB (Сервер HQ-SRV)
+1. Развертывание СУБД и Веб-сервера:bash
+apt-get install -y apache2 mariadb-server php php-mysqlnd
+systemctl enable --now httpd mariadb
+Используйте код с осторожностью.
+2. Импорт базы данных и создание пользователя:bash
+mysql -u root -e "CREATE DATABASE webdb;"
+mysql -u root webdb < /media/web/dump.sql
+mysql -u root -e "CREATE USER 'web'@'localhost' IDENTIFIED BY 'P@ssw0rd';"
+mysql -u root -e "GRANT ALL PRIVILEGES ON webdb.* TO 'web'@'localhost'; FLUSH PRIVILEGES;"
+Используйте код с осторожностью.
+3. Публикация контента:bash
+cp -r /media/web/index.php /media/web/images /var/www/html/
+chown -R apache:apache /var/www/html/
+Используйте код с осторожностью.
+Отредактируйте /var/www/html/index.php, вписав параметры: dbname=webdb, user=web, password=P@ssw0rd.bash
+systemctl restart httpd
+Используйте код с осторожностью.
+Задание 19. Статическая трансляция портов (Маршрутизаторы HQ-RTR и BR-RTR)
+Конфигурация DNAT на маршрутизаторах EcoRouterOS:
+text
+# На HQ-RTR (проброс веб-сервера и SSH на HQ-SRV):
+ip nat destination static bottom 172.16.1.2 tcp 8080 192.168.100.2 8080
+ip nat destination static bottom 172.16.1.2 tcp 2026 192.168.100.2 2026
+
+# На BR-RTR (проброс Docker-приложения и SSH на BR-SRV):
+ip nat destination static bottom 172.16.2.2 tcp 8080 192.168.0.2 8080
+ip nat destination static bottom 172.16.2.2 tcp 2026 192.168.0.2 2026
+Используйте код с осторожностью.
+Задания 20 и 21. Реверс-прокси Nginx + Web-based Basic Auth (Машина ISP)
+1. Создание базы хэшей паролей учётных записей:bash
+apt-get install -y apache2-utils
+htpasswd -bc /etc/nginx/.htpasswd WEB P@ssw0rd
+Используйте код с осторожностью.
+2. Конфигурация виртуальных хостов в /etc/nginx/conf.d/proxy.conf:nginx
+server {
+    listen 80;
+    server_name web.au-team.irpo;
+    location / {
+        auth_basic "Protected Exam Zone";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://172.16.1.2:8080; # Ссылаемся на внешний порт HQ-RTR
+        proxy_set_header Host $host;
+    }
+}
+server {
+    listen 80;
+    server_name docker.au-team.irpo;
+    location / {
+        proxy_pass http://172.16.2.2:8080; # Ссылаемся на внешний порт BR-RTR
+        proxy_set_header Host $host;
+    }
+}
+Используйте код с осторожностью.
+bash
+nginx -t && systemctl enable --now nginx
+Используйте код с осторожностью.
+🚀 МОДУЛЬ 3. Эксплуатация объектов сетевой инфраструктуры
+Задание 1. Пакетная миграция пользователей из CSV
+bash
+# Чтение файла users.csv из ISO и автоматизированный импорт в домен Samba DC
+tail -n +2 /media/users.csv | while IFS=',' read -r username password firstname lastname; do
+  samba-tool user create "$username" "$password" --given-name="$firstname" --surname="$lastname" --use-username-as-samantha
+  samba-tool group addmembers hq "$username"
+done
+Используйте код с осторожностью.
+Задание 2. Центр Сертификации ГОСТ и миграция на HTTPS (HQ-SRV / ISP)
+1. Создание CA ГОСТ на HQ-SRV:bash
+# Выпуск корневого сертификата на 30 дней
+openssl req -newkey gost2012_256 -nodes -keyout ca.key -x509 -days 30 -out ca.crt -subj "/C=RU/O=au-team/CN=AU-TEAM Root CA"
+Используйте код с осторожностью.
+2. Подписание сертификатов для веб-доменов:bash
+# Сертификат для веб-сервера Аpache
+openssl req -newkey gost2012_256 -nodes -keyout web.key -out web.csr -subj "/C=RU/O=au-team/CN=web.au-team.irpo"
+openssl x509 -req -in web.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out web.crt -days 30
+
+# Сертификат для Docker-стека
+openssl req -newkey gost2012_256 -nodes -keyout docker.key -out docker.csr -subj "/C=RU/O=au-team/CN=docker.au-team.irpo"
+openssl x509 -req -in docker.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out docker.crt -days 30
+Используйте код с осторожностью.
+3. Обеспечение доверия на клиенте HQ-CLI:
+Скопируйте ca.crt на клиентскую машину по пути /usr/share/ca-certificates/trust-source/anchors/ и примените команду:bash
+update-ca-trust
+Используйте код с осторожностью.
+4. Перевод Nginx на HTTPS на ISP:
+Скопируйте полученные web.crt/key и docker.crt/key на машину ISP и измените конфигурационный файл /etc/nginx/conf.d/proxy.conf:nginx
+server {
+    listen 443 ssl;
+    server_name web.au-team.irpo;
+    ssl_certificate /etc/nginx/ssl/web.crt;
+    ssl_certificate_key /etc/nginx/ssl/web.key;
+    location / {
+        auth_basic "Protected Exam Zone";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://172.16.1.2:8080;
+    }
+}
+server {
+    listen 443 ssl;
+    server_name docker.au-team.irpo;
+    ssl_certificate /etc/nginx/ssl/docker.crt;
+    ssl_certificate_key /etc/nginx/ssl/docker.key;
+    location / {
+        proxy_pass http://172.16.2.2:8080;
+    }
+}
+Используйте код с осторожностью.
+bash
+systemctl restart nginx
+Используйте код с осторожностью.
+Задание 3. Защищенный туннель IPsec (EcoRouter)
+Конфигурация фаз шифрования IKEv2/IPsec на HQ-RTR (на стороне BR-RTR настраивается зеркально):
+text
+crypto ikev2 policy GOST_IKE
+ encryption aes-256
+ integrity sha256
+ group 14
+exit
+
+crypto ikev2 profile GOST_PROF
+ match identity remote address 172.16.2.2 # Внешний IP BR-RTR
+ identity local address 172.16.1.2        # Внешний IP HQ-RTR
+ authentication local pre-shared-key TopSecretPass
+ authentication remote pre-shared-key TopSecretPass
+exit
+
+crypto ipsec transform-set GOST_ESP esp-aes-256 esp-sha256-hmac
+ mode tunnel
+exit
+
+crypto ipsec profile IPSEC_GOST_PROFILE
+ set transform-set GOST_ESP
+ set ikev2-profile GOST_PROF
+exit
+
+interface tunnel0
+ tunnel protection ipsec profile IPSEC_GOST_PROFILE
+exit
+Используйте код с осторожностью.
+Задание 4. Межсетевой экран на периметре (HQ-RTR)
+Ограничение входящего трафика на внешнем интерфейсе EcoRouter:
+text
+ip access-list extended EXTERNAL_IN_FILTER
+ permit tcp any any eq 80
+ permit tcp any any eq 443
+ permit udp any any eq 53
+ permit udp any any eq 123
+ permit icmp any any
+ deny ip any any
+exit
+
+interface ge0 # Внешний физический интерфейс, подключенный к ISP
+ ip access-list EXTERNAL_IN_FILTER in
+exit
+Используйте код с осторожностью.
+Задание 5. Публикация принт-сервера CUPS (HQ-SRV)
+1. На сервере (HQ-SRV):bash
+apt-get install -y cups cups-filters
+systemctl enable --now cups
+# Разрешаем публикацию в сети
+lpadmin -p PDF-Printer -E -v cups-pdf:/ -m raw
+Используйте код с осторожностью.
+2. На клиенте (HQ-CLI):bash
+lpadmin -p HQ-PDF-Printer -E -v ipp://192.168.100.2:631/printers/PDF-Printer
+lpoptions -d HQ-PDF-Printer
+Используйте код с осторожностью.
+Задание 6. Сбор системных логов Syslog и ротация логов (HQ-SRV)
+1. Запуск приемника на сервере HQ-SRV:
+Раскомментируйте в файле /etc/rsyslog.conf строки:text
+$ModLoad imudp
+$UDPServerRun 514
+Используйте код с осторожностью.
+Добавьте динамический шаблон в конец файла, отсекающий логи самого сервера:text
+$template DynamicHost,"/opt/%HOSTNAME%/%PROGRAMNAME%.log"
+if $fromhost-ip != '127.0.0.1' and $syslogseverity <= 4 then ?DynamicHost
+& stop
+Используйте код с осторожностью.
+bash
+systemctl restart rsyslog
+Используйте код с осторожностью.
+2. Конфигурация автоматической ротации (/etc/logrotate.d/syslog-opt):text
+/opt/*/*.log {
+    weekly
+    size 10M
+    compress
+    missingok
+    notifempty
+    sharedscripts
+    postrotate
+        /bin/kill -HUP `cat /var/run/rsyslogd.pid 2> /dev/null` 2> /dev/null || true
+    endscript
+}
+Используйте код с осторожностью.
+Задание 7. Мониторинг сети и узлов Zabbix (HQ-SRV)
+1. Развертывание агентов на отслеживаемых хостах (HQ-SRV, BR-SRV):bash
+apt-get install -y zabbix-agent
+# Отредактируйте /etc/zabbix/zabbix_agentd.conf: Server=<IP_HQ-SRV>
+systemctl enable --now zabbix-agent
+Используйте код с осторожностью.
+2. Контейнерный запуск: Разверните Zabbix-контейнер согласно docker-compose.yml из Модуля 2. Измените дефолтные аутентификационные данные в веб-панели на admin / P@ssw0rd.
+Задание 8. Сценарий автоматической инвентаризации Ansible (BR-SRV)
+Запустите готовый плейбук из папки Additional.iso:
+bash
+ansible-playbook /etc/ansible/get_info.yml
+Используйте код с осторожностью.
+Данный скрипт автоматически соберет параметры ansible_hostname и ansible_default_ipv4.address со всех клиентов и создаст соответствующие отчетные .yml файлы в директории /etc/ansible/PC-INFO/.
+Задание 9. Защита PAM от перебора паролей по SSH (HQ-SRV)
+Отредактируйте файл /etc/pam.d/sshd, добавив блокировки в самое начало соответствующих секций:
+text
+# Секция auth
+auth required pam_faillock.so preauth silent audit deny=3 unlock_time=60
+auth [default=die] pam_faillock.so authfail audit deny=3 unlock_time=60
+
+# Секция account
+account required pam_faillock.so
+Используйте код с осторожностью.
+Задание 10. Резервное копирование Кибер Бэкап (HQ-SRV и HQ-CLI)
+1. Развертывание серверного ПО на HQ-SRV:bash
+rpm -i CyberBackupServer-17.4.rpm
+useradd irpoadmin
+passwd irpoadmin # Задайте P@ssw0rd
+Используйте код с осторожностью.
+2. Установка Агента на хранилище HQ-CLI:bash
+rpm -i CyberBackupAgentStorage-17.4.rpm
+mkdir -p /backup
+Используйте код с осторожностью.
